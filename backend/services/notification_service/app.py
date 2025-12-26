@@ -1,71 +1,114 @@
 from flask import Flask, jsonify, request
-import datetime
+import mysql.connector
+import requests
 
 app = Flask(__name__)
 
-MOCK_DATABASE = {
-    1: {"customer": "Ahmed Ali", "phone": "01012345678", "email": "ahmed@test.com"},
-    2: {"customer": "Sara Mohsen", "phone": "01122334455", "email": "sara@test.com"},
+db_config = {
+    'host': 'localhost',
+    'user': 'root',
+    'password': 'root',
+    'database': 'ecommerce_system'
 }
 
-@app.route('/', methods=['GET'])
-def health_check():
-    return jsonify({"service": "notification_service", "port": 5005, "status": "active"})
 
-# --- Endpoint المطلوب في الـ PDF ---
+CUSTOMER_SERVICE_URL = "http://localhost:5004/api/customers"
+INVENTORY_SERVICE_URL = "http://localhost:5002/api/inventory/check"
+
+def get_db_connection():
+    try:
+        return mysql.connector.connect(**db_config)
+    except mysql.connector.Error as err:
+        print(f"❌ DB Connection Error: {err}")
+        return None
+
+def log_to_db(order_id, customer_id, message):
+    conn = get_db_connection()
+    if conn:
+        cursor = conn.cursor()
+        try:
+            sql = "INSERT INTO notification_log (order_id, customer_id, notification_type, message) VALUES (%s, %s, %s, %s)"
+            cursor.execute(sql, (order_id, customer_id, 'SMS', message))
+            conn.commit()
+            print("✅ [DB] Log saved successfully.")
+        except Exception as e:
+            print(f"❌ [DB] Error logging: {e}")
+        finally:
+            cursor.close()
+            conn.close()
+
+
 @app.route('/api/notifications/send', methods=['POST'])
 def send_notification():
-    # 1. Receive order_id from Order Service (Step 1 in PDF)
     data = request.get_json()
     order_id = data.get('order_id')
 
     if not order_id:
         return jsonify({"error": "Missing order_id"}), 400
 
-    print(f"\n[🔄 START] Processing Notification for Order #{order_id}")
+    print(f"\n🔄 Processing Notification for Order #{order_id}")
 
-    # 2. Simulate Calling Customer Service (Step 2 in PDF)
-    customer_info = MOCK_DATABASE.get(order_id, {"customer": "Unknown Guest", "phone": "0000000000"})
-    name = customer_info['customer']
-    phone = customer_info['phone']
+    conn = get_db_connection()
+    customer_id = None
+    product_id_sample = 1 # افتراضي للتحقق من المخزون
 
-    print(f"[📞 SIMULATION] Retrieved Customer Info: {name} | Phone: {phone}")
+    if conn:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+                       SELECT o.customer_id, oi.product_id
+                       FROM orders o
+                                LEFT JOIN order_items oi ON o.order_id = oi.order_id
+                       WHERE o.order_id = %s LIMIT 1
+                       """, (order_id,))
+        result = cursor.fetchone()
+        conn.close()
 
-    # 3. Simulate Calling Inventory Service (Step 3 in PDF)
-
-    print(f"[📦 SIMULATION] Inventory Status Checked: Items Reserved.")
-
-    # 4. Generate Message & Log (Step 4 & 5 in PDF)
-    message = f"Hi {name}, your order #{order_id} is confirmed! Thank you for shopping."
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    # consol log
-    print("=" * 40)
-    print(f"📲 SENDING SMS...")
-    print(f"TO: {phone}")
-    print(f"MSG: {message}")
-    print("=" * 40)
-
-    # تسجيل في ملف Text (بديل الـ Log to Database)
-    log_entry = f"[{timestamp}] Order: {order_id} | Sent To: {phone} | Status: Sent\n"
+        if result:
+            customer_id = result['customer_id']
+            if result['product_id']: product_id_sample = result['product_id']
+        else:
+            return jsonify({"error": "Order not found"}), 404
     try:
-        with open("notifications_log.txt", "a", encoding="utf-8") as f:
-            f.write(log_entry)
-        print("[✅ LOG] Saved to notifications_log.txt")
-    except Exception as e:
-        print(f"[❌ LOG ERROR] Could not write to file: {e}")
+        print(f"📞 Calling Customer Service API for ID: {customer_id}...")
+        cust_response = requests.get(f"{CUSTOMER_SERVICE_URL}/{customer_id}")
 
-    # 6. Return success confirmation (Step 6 in PDF)
+        if cust_response.status_code == 200:
+            cust_data = cust_response.json()
+            customer_name = cust_data.get('name')
+            phone = cust_data.get('phone')
+            print(f"   ✅ Customer Found: {customer_name}, Phone: {phone}")
+        else:
+            print("   ❌ Customer Service Error")
+            return jsonify({"error": "Failed to fetch customer data"}), 500
+
+    except Exception as e:
+        return jsonify({"error": f"Customer Service Unreachable: {str(e)}"}), 503
+    try:
+        print(f"📦 Calling Inventory Service API for Product: {product_id_sample}...")
+        inv_response = requests.get(f"{INVENTORY_SERVICE_URL}/{product_id_sample}")
+
+        if inv_response.status_code == 200:
+            print("   ✅ Inventory Check: OK")
+        else:
+            print("   ⚠️ Inventory Check: Warning (Item might be out of stock)")
+
+    except Exception as e:
+        print(f"   ⚠️ Inventory Service Unreachable: {e}")
+    message = f"Hello {customer_name}, your order #{order_id} is confirmed!"
+    print("=" * 40)
+    print(f"📲 SENDING SMS TO: {phone}")
+    print(f"💬 MESSAGE: {message}")
+    print("=" * 40)
+    log_to_db(order_id, customer_id, message)
+
     return jsonify({
         "status": "success",
-        "message": "Notification processed successfully",
+        "message": "Notification sent via Real API orchestration",
         "details": {
-            "order_id": order_id,
-            "sent_to": phone,
-            "channel": "SMS (Simulated)"
+            "customer": customer_name,
+            "phone": phone
         }
     }), 200
 
 if __name__ == '__main__':
-    # Running on port 5005
     app.run(port=5005, debug=True)

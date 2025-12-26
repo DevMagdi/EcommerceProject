@@ -1,7 +1,6 @@
 from flask import Flask, jsonify, request
 import mysql.connector
 import requests
-from datetime import datetime
 
 app = Flask(__name__)
 
@@ -19,6 +18,122 @@ def get_db_connection():
 @app.route('/', methods=['GET'])
 def health_check():
     return jsonify({"service": "order_service", "status": "active"})
+
+@app.route('/api/orders', methods=['GET'])
+def get_all_orders():
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    try:
+        query_orders = """
+            SELECT order_id, customer_id, total_amount, status, created_at
+            FROM orders
+            ORDER BY created_at DESC
+        """
+        cursor.execute(query_orders)
+        orders = cursor.fetchall()
+        
+        result = []
+        for order in orders:
+            query_items = """
+                SELECT product_id, quantity, unit_price_at_purchase
+                FROM order_items
+                WHERE order_id = %s
+            """
+            cursor.execute(query_items, (order['order_id'],))
+            items = cursor.fetchall()
+            
+            order_data = {
+                "order_id": order['order_id'],
+                "customer_id": order['customer_id'],
+                "total_amount": float(order['total_amount']),
+                "status": order['status'],
+                "created_at": order['created_at'].isoformat() if order['created_at'] else None,
+                "items": [
+                    {
+                        "product_id": item['product_id'],
+                        "quantity": item['quantity'],
+                        "unit_price": float(item['unit_price_at_purchase'])
+                    }
+                    for item in items
+                ]
+            }
+            result.append(order_data)
+        
+        return jsonify({
+            "total_orders": len(result),
+            "orders": result
+        }), 200
+        
+    except mysql.connector.Error as err:
+        return jsonify({"error": f"Database Error: {err}"}), 500
+    
+    except Exception as e:
+        return jsonify({"error": f"Server Error: {str(e)}"}), 500
+    
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
+@app.route('/api/orders/<int:order_id>', methods=['GET'])
+def get_order(order_id):
+
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    try:
+        query_order = """
+            SELECT order_id, customer_id, total_amount, status, created_at
+            FROM orders
+            WHERE order_id = %s
+        """
+        cursor.execute(query_order, (order_id,))
+        order = cursor.fetchone()
+        
+        if not order:
+            return jsonify({"error": f"Order {order_id} not found"}), 404
+        
+        query_items = """
+            SELECT product_id, quantity, unit_price_at_purchase
+            FROM order_items
+            WHERE order_id = %s
+        """
+        cursor.execute(query_items, (order_id,))
+        items = cursor.fetchall()
+        
+        response = {
+            "order_id": order['order_id'],
+            "customer_id": order['customer_id'],
+            "total_amount": float(order['total_amount']),
+            "status": order['status'],
+            "created_at": order['created_at'].isoformat() if order['created_at'] else None,
+            "items": [
+                {
+                    "product_id": item['product_id'],
+                    "quantity": item['quantity'],
+                    "unit_price": float(item['unit_price_at_purchase'])
+                }
+                for item in items
+            ]
+        }
+        
+        return jsonify(response), 200
+        
+    except mysql.connector.Error as err:
+        return jsonify({"error": f"Database Error: {err}"}), 500
+    
+    except Exception as e:
+        return jsonify({"error": f"Server Error: {str(e)}"}), 500
+    
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
 
 @app.route('/api/orders/create', methods=['POST'])
 def create_order():
@@ -127,6 +242,7 @@ def create_order():
             cursor.close()
         if conn:
             conn.close()
+
 
 if __name__ == '__main__':
     print("Order Service running on port 5001...")
