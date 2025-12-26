@@ -9,7 +9,7 @@ app = Flask(__name__)
 DB_CONFIG = {
     'host': 'localhost',
     'user': 'root',  # Change this to your MySQL username
-    'password': 'SoftwareSQL_11',  # Change this to your MySQL password
+    'password': 'root',  # Change this to your MySQL password
     'database': 'ecommerce_system'
 }
 
