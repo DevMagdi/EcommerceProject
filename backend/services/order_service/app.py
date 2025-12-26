@@ -7,8 +7,8 @@ app = Flask(__name__)
 
 db_config = {
     'host': 'localhost',
-    'user': 'root',
-    'password': 'root',
+    'user': 'root',  
+    'password': 'root', 
     'database': 'ecommerce_system'
 }
 
@@ -21,17 +21,40 @@ def health_check():
 
 @app.route('/api/orders', methods=['GET'])
 def get_all_orders():
+    # Get customer_id from query parameters (e.g., /api/orders?customer_id=1)
+    customer_id = request.args.get('customer_id')
+    
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
     
     try:
-        query_orders = """
-            SELECT order_id, customer_id, total_amount, status, created_at
-            FROM orders
-            ORDER BY created_at DESC
-        """
-        cursor.execute(query_orders)
+        # Build query based on whether customer_id is provided
+        if customer_id:
+            # Filter by specific customer
+            query_orders = """
+                SELECT order_id, customer_id, total_amount, status, created_at
+                FROM orders
+                WHERE customer_id = %s
+                ORDER BY created_at DESC
+            """
+            cursor.execute(query_orders, (customer_id,))
+        else:
+            # Return all orders (no filter)
+            query_orders = """
+                SELECT order_id, customer_id, total_amount, status, created_at
+                FROM orders
+                ORDER BY created_at DESC
+            """
+            cursor.execute(query_orders)
+        
         orders = cursor.fetchall()
+        
+        # If no orders found for this customer, return empty list
+        if not orders:
+            return jsonify({
+                "total_orders": 0,
+                "orders": []
+            }), 200
         
         result = []
         for order in orders:
@@ -76,7 +99,6 @@ def get_all_orders():
             cursor.close()
         if conn:
             conn.close()
-
 
 @app.route('/api/orders/<int:order_id>', methods=['GET'])
 def get_order(order_id):
